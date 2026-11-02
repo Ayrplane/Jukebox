@@ -8,10 +8,12 @@
   it gets this page's site as its referrer.
 
   Uses the privacy-enhanced youtube-nocookie.com player, which skips the
-  cookie-consent screen. When playback actually begins it seeks forward by
-  however long loading took, so every client lands on the host's position.
+  cookie-consent screen. While the song plays it re-checks every 2s and
+  seeks to the host's position if it's more than 2s off (after an ad, a slow
+  load, or drift), so every client hears the same part of the song.
 
-  Usage:  https://<your-site>/jukebox-player.html?v=<videoId>&start=<seconds>
+  Usage:  https://<your-site>/jukebox-player.html?v=<videoId>&start=<seconds>&vol=<0-100>#vol=<0-100>
+          (the #vol fragment is updated live by the game's volume slider)
   Then set JukeboxHud's "Player Page Url" to https://<your-site>/jukebox-player.html
 -->
 <html>
@@ -36,6 +38,8 @@
     var videoId = (params.get('v') || '').replace(/[^A-Za-z0-9_-]/g, '');
     var start = parseFloat(params.get('start') || '0') || 0;
     var loadedAt = Date.now();   // the game builds this URL right as it loads it
+    var volParam = parseInt(params.get('vol'), 10);
+    var desiredVolume = isNaN(volParam) ? 100 : Math.max(0, Math.min(100, volParam));
 
     var tag = document.createElement('script');
     tag.src = 'https://www.youtube.com/iframe_api';
@@ -46,9 +50,20 @@
     function tryPlay() {
       if (!player || !player.playVideo) return;
       player.unMute();
-      player.setVolume(100);
+      player.setVolume(desiredVolume);
       player.playVideo();
     }
+
+    // Each player's own volume slider, 0..100. The game changes only the
+    // URL's #vol=NN fragment, which doesn't reload the page.
+    function applyHashVolume() {
+      var m = /vol=(\d+)/.exec(location.hash);
+      if (!m) return;
+      desiredVolume = Math.max(0, Math.min(100, parseInt(m[1], 10)));
+      if (player && player.setVolume) player.setVolume(desiredVolume);
+    }
+    window.addEventListener('hashchange', applyHashVolume);
+    applyHashVolume();
 
     // Where the host's song is right now (its clock kept running while we
     // loaded, buffered or sat through an ad).
@@ -62,6 +77,10 @@
       if (!player || !player.getPlayerState) return;
       if (player.getPlayerState() !== YT.PlayerState.PLAYING) return;
       var target = hostPosition();
+      // Never seek to (or past) the end: that ends the video, a click restarts
+      // it from 0, and it seeks to the end again — a loop.
+      var dur = player.getDuration ? player.getDuration() : 0;
+      if (dur > 0 && target >= dur - 1) return;
       if (Math.abs(player.getCurrentTime() - target) > 2) player.seekTo(target, true);
     }, 2000);
 
